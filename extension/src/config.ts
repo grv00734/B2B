@@ -14,6 +14,7 @@ export function getConfig(): AegisConfig {
     detectors: {
       secrets: c.get<boolean>("detectors.secrets", true),
       pii: c.get<boolean>("detectors.pii", true),
+      identity: c.get<boolean>("detectors.identity", true),
       network: c.get<boolean>("detectors.network", true),
       dictionary: c.get<boolean>("detectors.dictionary", true),
       code: c.get<boolean>("detectors.code", true),

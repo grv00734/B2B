@@ -2,6 +2,8 @@ import type { AegisConfig, Category, DetectionSummary, Detector, RawMatch, Sever
 import { Vault } from "./placeholders.js";
 import { secretsDetector } from "./detectors/secrets.js";
 import { piiDetector } from "./detectors/pii.js";
+import { identityDetector } from "./detectors/identity.js";
+import { makeNerDetector } from "./detectors/ner.js";
 import { networkDetector } from "./detectors/network.js";
 import { makeDictionaryDetector } from "./detectors/dictionary.js";
 import { makeCodeDetector } from "./detectors/code.js";
@@ -62,6 +64,8 @@ export class Scrubber {
     const d: Detector[] = [];
     if (cfg.detectors.secrets) d.push(secretsDetector);
     if (cfg.detectors.pii) d.push(piiDetector);
+    if (cfg.detectors.identity) d.push(identityDetector);
+    if (cfg.nerCommand) d.push(makeNerDetector(cfg.nerCommand));
     if (cfg.detectors.network) d.push(networkDetector);
     if (cfg.detectors.dictionary) d.push(makeDictionaryDetector(cfg.dictionary));
     if (cfg.detectors.code) d.push(makeCodeDetector(cfg.code.markers, cfg.code.internalNamespaces));

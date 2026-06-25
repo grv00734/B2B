@@ -26,7 +26,9 @@
       { "command": "aegis.scanWorkspace", "title": "Aegis: Scan Workspace", "category": "Aegis" },
       { "command": "aegis.redactSelection", "title": "Aegis: Redact Selection", "category": "Aegis" },
       { "command": "aegis.copyRedacted", "title": "Aegis: Copy as Redacted", "category": "Aegis" },
-      { "command": "aegis.showAudit", "title": "Aegis: Show Activity Log", "category": "Aegis" }
+      { "command": "aegis.showAudit", "title": "Aegis: Show Activity Log", "category": "Aegis" },
+      { "command": "aegis.openDashboard", "title": "Aegis: Open Dashboard", "category": "Aegis" },
+      { "command": "aegis.openDashboardPanel", "title": "Aegis: Open Dashboard Panel", "category": "Aegis" }
     ],
     "menus": {
       "editor/context": [

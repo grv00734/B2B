@@ -11,6 +11,11 @@ import { startMitmProxy } from "./mitm.js";
 import { CertAuthority, trustInstructions } from "./ca.js";
 import { plan as transparentPlan, apply as transparentApply, isRoot } from "./transparent.js";
 import { probeHealth, probeTcp } from "./status.js";
+import { startGui } from "./gui.js";
+import { launchApp } from "./app.js";
+import { scanHistory } from "./history.js";
+import { buildReport, formatReportText, parseAuditFile } from "./report.js";
+import { spawn } from "node:child_process";
 
 function parseFlags(args: string[]): { positionals: string[]; flags: Record<string, string> } {
   const positionals: string[] = [];
@@ -54,6 +59,40 @@ function cmdInit(): void {
     : JSON.stringify({ port: 8787, mode: "redact" }, null, 2);
   writeFileSync(target, contents, "utf8");
   console.log(`Wrote ${target}. Edit the dictionary / code sections for your org, then run: aegis start`);
+}
+
+function openBrowser(url: string): void {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    const child = spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    /* best effort */
+  }
+}
+
+function cmdGui(flags: Record<string, string>): void {
+  const cfg = loadConfig(flags.config);
+  const guiPort = flags.port ? Number(flags.port) : 8799;
+  startGui(cfg, guiPort);
+  if (flags.open === "true") openBrowser(`http://${cfg.host}:${guiPort}`);
+}
+
+function cmdApp(flags: Record<string, string>): void {
+  const cfg = loadConfig(flags.config);
+  const guiPort = flags.port ? Number(flags.port) : 8799;
+  startGui(cfg, guiPort);
+  const url = `http://${cfg.host}:${guiPort}`;
+  const r = launchApp(url);
+  if (r.launched) {
+    console.log(`  Opened Aegis as a desktop app window (${r.browser}).`);
+    console.log(`  Close the window to keep it running, or Ctrl-C here to stop the guard.`);
+  } else {
+    console.log(`  No Chromium-family browser found for app mode. Opening in your default browser:`);
+    console.log(`    ${url}`);
+    openBrowser(url);
+  }
 }
 
 async function cmdStatus(flags: Record<string, string>): Promise<void> {
@@ -185,6 +224,47 @@ function cmdSetup(flags: Record<string, string>): void {
   console.log(`Undo any time with: aegis setup --undo`);
 }
 
+function cmdScanHistory(flags: Record<string, string>): void {
+  const cfg = loadConfig(flags.config);
+  const scrubber = new Scrubber(cfg);
+  const cwd = flags.path ? resolve(process.cwd(), flags.path) : process.cwd();
+
+  let res;
+  try {
+    res = scanHistory(scrubber, cwd);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (res.findings.length === 0) {
+    console.log(`Scanned ${res.scannedBlobs} blob(s) across git history. No confidential data found.`);
+    return;
+  }
+  console.log(`Scanned ${res.scannedBlobs} blob(s). Found ${res.findings.length} item(s):\n`);
+  for (const f of res.findings) {
+    console.log(`  [${f.severity.toUpperCase()}] ${f.type}  ${f.path}@${f.blob}  (${f.preview})`);
+  }
+  console.log("\nBy type:", JSON.stringify(res.summary.byType));
+  process.exitCode = 2;
+}
+
+function cmdReport(flags: Record<string, string>): void {
+  const cfg = loadConfig(flags.config);
+  const input = flags.input ?? cfg.auditLog ?? "./aegis-audit.log";
+  const p = resolve(process.cwd(), input);
+  if (!existsSync(p)) {
+    console.error(`Audit log not found: ${p}. Run the guard so it can record activity first.`);
+    process.exitCode = 1;
+    return;
+  }
+  const entries = parseAuditFile(readFileSync(p, "utf8"));
+  const report = buildReport(entries, { since: flags.since, generatedAt: new Date().toISOString() });
+  if (flags.format === "json") console.log(JSON.stringify(report, null, 2));
+  else console.log(formatReportText(report));
+}
+
 function cmdScan(positionals: string[], flags: Record<string, string>): void {
   const cfg = loadConfig(flags.config);
   const scrubber = new Scrubber(cfg);
@@ -228,6 +308,12 @@ function main(): void {
     case "scan":
       cmdScan(positionals, flags);
       break;
+    case "scan-history":
+      cmdScanHistory(flags);
+      break;
+    case "report":
+      cmdReport(flags);
+      break;
     case "setup":
       cmdSetup(flags);
       break;
@@ -236,6 +322,12 @@ function main(): void {
       break;
     case "status":
       void cmdStatus(flags);
+      break;
+    case "gui":
+      cmdGui(flags);
+      break;
+    case "app":
+      cmdApp(flags);
       break;
     case "transparent":
       cmdTransparent(flags);
@@ -265,8 +357,17 @@ Usage:
   aegis setup  [--undo]
       Auto-route ALL terminals through the base-URL guard.
 
+  aegis app    [--config <path>] [--port <n>]
+      Open the control panel as a standalone desktop app window.
+
+  aegis gui    [--config <path>] [--port <n>] [--open]
+      Launch the local web control panel (default http://127.0.0.1:8799).
+
   aegis status [--config <path>]              Check whether the guard is running
-  aegis scan   [file] [--config <path>]       Scan a file (or stdin) for findings
+  aegis scan        [file] [--config <path>]  Scan a file (or stdin) for findings
+  aegis scan-history [--path <dir>]           Scan the entire git history for secrets
+  aegis report      [--since <iso>] [--format text|json] [--input <log>]
+      Compliance report (PCI/HIPAA/GDPR) from the audit log.
   aegis init                                  Write a starter aegis.config.json
 
 Examples:

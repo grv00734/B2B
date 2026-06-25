@@ -1,0 +1,7 @@
+This is a perfectly ordinary README paragraph.
+
+It describes how to build the widget factory using the public API. There are no secrets,
+no customer data, and no internal codenames here — just normal prose that should produce
+zero findings and demonstrate that Aegis does not over-redact harmless text.
+
+Version 2.0.1 ships on Tuesday. The build takes about 3 minutes.

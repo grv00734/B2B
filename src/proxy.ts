@@ -186,10 +186,34 @@ export async function handleRequest(
     });
   }
 
-  await sendResponse(res, upstream, responseVault);
+  // Build a response scanner that flags NEW secrets in the AI output. It scans
+  // the model's raw text (before placeholder restore) so the employee's own
+  // restored values don't re-trigger.
+  const responseScanner = cfg.scanResponses
+    ? (rawText: string): void => {
+        const matches = scrubber.detect(rawText);
+        if (matches.length === 0) return;
+        void audit.record({
+          ts: new Date().toISOString(),
+          route: url.pathname,
+          format: route.format,
+          mode: cfg.mode,
+          action: "warned",
+          direction: "response",
+          summary: summarize(matches),
+        });
+      }
+    : undefined;
+
+  await sendResponse(res, upstream, responseVault, responseScanner);
 }
 
-async function sendResponse(res: ServerResponse, upstream: Response, vault: Vault): Promise<void> {
+async function sendResponse(
+  res: ServerResponse,
+  upstream: Response,
+  vault: Vault,
+  scanResponse?: (rawText: string) => void,
+): Promise<void> {
   const respHeaders: Record<string, string> = {};
   upstream.headers.forEach((value, key) => {
     if (!STRIP_RESPONSE_HEADERS.has(key.toLowerCase())) respHeaders[key] = value;
@@ -197,9 +221,11 @@ async function sendResponse(res: ServerResponse, upstream: Response, vault: Vaul
 
   const ctype = upstream.headers.get("content-type") ?? "";
   const status = upstream.status;
+  const textish =
+    ctype.includes("json") || ctype.includes("event-stream") || ctype.startsWith("text/");
 
-  // Nothing was redacted -> the response can't contain placeholders -> stream raw.
-  if (vault.size === 0 || !upstream.body) {
+  // Binary / unknown bodies: stream raw, no transform, no scan.
+  if (!upstream.body || !textish) {
     res.writeHead(status, respHeaders);
     if (upstream.body) {
       for await (const chunk of upstream.body as AsyncIterable<Uint8Array>) res.write(chunk);
@@ -214,32 +240,39 @@ async function sendResponse(res: ServerResponse, upstream: Response, vault: Vaul
     respHeaders["content-type"] = "text/event-stream";
     respHeaders["cache-control"] = "no-cache";
     res.writeHead(status, respHeaders);
-    const restorer = new SseRestorer(vault);
+    const restorer = vault.size > 0 ? new SseRestorer(vault) : null;
+    let raw = "";
     for await (const chunk of upstream.body as AsyncIterable<Uint8Array>) {
-      res.write(restorer.feed(decoder.decode(chunk, { stream: true })));
+      const txt = decoder.decode(chunk, { stream: true });
+      raw += txt; // pre-restore text, for response scanning
+      res.write(restorer ? restorer.feed(txt) : txt);
     }
-    res.write(restorer.feed(decoder.decode()));
-    res.write(restorer.end());
+    const tail = decoder.decode();
+    raw += tail;
+    if (restorer) {
+      res.write(restorer.feed(tail));
+      res.write(restorer.end());
+    } else if (tail) {
+      res.write(tail);
+    }
     res.end();
+    if (scanResponse) scanResponse(raw);
     return;
   }
 
-  if (ctype.includes("application/json") || ctype.includes("+json")) {
-    const text = await upstream.text();
-    let restored = text;
+  // JSON / text: buffer, (optionally) restore, scan the raw text, send.
+  const text = await upstream.text();
+  let out = text;
+  if (vault.size > 0) {
     try {
-      restored = JSON.stringify(vault.restoreDeep(JSON.parse(text)));
+      out = JSON.stringify(vault.restoreDeep(JSON.parse(text)));
     } catch {
-      restored = vault.restore(text); // best-effort on non-JSON
+      out = vault.restore(text);
     }
-    respHeaders["content-type"] = ctype || "application/json";
-    res.writeHead(status, respHeaders);
-    res.end(restored);
-    return;
   }
-
-  // Other content types: restore over the decoded text best-effort.
-  const buf = Buffer.from(await upstream.arrayBuffer());
+  if (scanResponse) scanResponse(text);
+  respHeaders["content-type"] = ctype || "application/json";
+  respHeaders["content-length"] = String(Buffer.byteLength(out));
   res.writeHead(status, respHeaders);
-  res.end(vault.restore(buf.toString("utf8")));
+  res.end(out);
 }

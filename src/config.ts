@@ -10,10 +10,12 @@ export const DEFAULT_CONFIG: AegisConfig = {
   detectors: {
     secrets: true,
     pii: true,
+    identity: true,
     network: true,
     dictionary: true,
     code: true,
   },
+  scanResponses: true,
   dictionary: [],
   code: {
     markers: ["CONFIDENTIAL", "PROPRIETARY", "INTERNAL USE ONLY", "DO NOT DISTRIBUTE"],
@@ -69,7 +71,8 @@ export function loadConfig(explicitPath?: string): AegisConfig {
     if (existsSync(p)) {
       try {
         const raw = JSON.parse(readFileSync(p, "utf8")) as Partial<AegisConfig>;
-        const cfg = merge(DEFAULT_CONFIG, raw);
+        let cfg = merge(DEFAULT_CONFIG, raw);
+        cfg = applyPolicy(cfg);
         applyEnvOverrides(cfg);
         return cfg;
       } catch (err) {
@@ -78,9 +81,33 @@ export function loadConfig(explicitPath?: string): AegisConfig {
     }
   }
 
-  const cfg = merge(DEFAULT_CONFIG, {});
+  let cfg = merge(DEFAULT_CONFIG, {});
+  cfg = applyPolicy(cfg);
   applyEnvOverrides(cfg);
   return cfg;
+}
+
+/**
+ * Overlay a centrally-managed policy file (a partial config) on top of the local
+ * config. The policy is authoritative — this is how a security team enforces the
+ * same dictionary/mode/detectors across many machines from one shared file.
+ * Supports `AEGIS_POLICY` env var as well as the `policyFile` config field.
+ */
+function applyPolicy(cfg: AegisConfig): AegisConfig {
+  const path = process.env.AEGIS_POLICY ?? cfg.policyFile;
+  if (!path) return cfg;
+  const p = resolve(process.cwd(), path);
+  if (!existsSync(p)) {
+    console.error(`[aegis] policy file not found: ${p}`);
+    return cfg;
+  }
+  try {
+    const policy = JSON.parse(readFileSync(p, "utf8")) as Partial<AegisConfig>;
+    return merge(cfg, policy); // policy wins
+  } catch (err) {
+    console.error(`[aegis] failed to read policy file ${p}: ${(err as Error).message}`);
+    return cfg;
+  }
 }
 
 function applyEnvOverrides(cfg: AegisConfig): void {

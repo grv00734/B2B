@@ -8,10 +8,13 @@
   "detectors": {
     "secrets": true,
     "pii": true,
+    "identity": true,
     "network": true,
     "dictionary": true,
     "code": true
   },
+
+  "scanResponses": true,
 
   "dictionary": [
     "Project Phoenix",

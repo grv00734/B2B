@@ -10,6 +10,8 @@ export interface AuditEntry {
   mode: Mode;
   action: Action;
   summary: DetectionSummary;
+  /** "request" (outbound, default) or "response" (secrets in AI output). */
+  direction?: "request" | "response";
 }
 
 /**

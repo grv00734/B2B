@@ -16,6 +16,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts start",
     "start": "node dist/cli.js start",
+    "app": "node dist/cli.js app",
+    "gui": "node dist/cli.js gui --open",
     "scan": "tsx src/cli.ts scan",
     "test": "vitest run",
     "test:watch": "vitest"

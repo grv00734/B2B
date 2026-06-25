@@ -34,6 +34,7 @@ notices.**
 - [Prerequisites](#prerequisites)
 - [Install and build](#install-and-build)
 - [Running Aegis](#running-aegis)
+- [Web control panel (GUI)](#web-control-panel-gui)
 - [CLI commands](#cli-commands)
 - [Configuration](#configuration)
 - [VS Code extension](#vs-code-extension)
@@ -70,16 +71,48 @@ flowchart LR
 
 ## Why this beats git-secrets / gitleaks / GitGuardian
 
-| | git-secrets / gitleaks | GitGuardian | Aegis |
+| | git-secrets / gitleaks | GitGuardian / Cyberhaven | Aegis |
 |---|:--:|:--:|:--:|
-| Catches secrets at **commit** time | Yes | Yes | Yes (`aegis scan` in pre-commit/CI) |
+| Catches secrets at **commit** time | Yes | Yes | Yes (`aegis scan`) |
+| Scans entire **git history** | Yes | Yes | Yes (`aegis scan-history`) |
 | Catches data pasted into **AI agents** | No | No | Yes |
+| Scans **AI responses** for new secrets | No | No | Yes |
 | Works across **any** agent (not one editor) | No | No | Yes (API + OS level) |
 | **Restores** values so the workflow isn't broken | n/a | n/a | Yes |
+| Context-aware PII (names, addresses, DOB) | No | Yes (cloud ML) | Yes (local heuristics + optional local NER) |
 | Custom company dictionary (codenames, customers) | Partial | Partial | Yes (first-class) |
-| Confidential **source-code** markers / namespaces | No | No | Yes |
+| **Compliance reports** (PCI/HIPAA/GDPR) | No | Yes | Yes (`aegis report`) |
+| **Dashboard / desktop app** | No | Yes (SaaS) | Yes (web + iOS-style app) |
+| **Central team policy** | No | Yes (cloud) | Yes (shared policy file) |
 | Runs fully **offline**, never phones home | Yes | No (SaaS) | Yes |
 | Needs **no API key**, makes no AI calls | Yes | No | Yes |
+
+---
+
+## Enterprise-grade coverage
+
+The gaps that typically separate a local tool from enterprise DLP are closed — without giving
+up the offline, no-API-key design:
+
+- **Context-aware PII** — beyond field-regex, a local detector finds person names (bundled
+  name list + context), street addresses, dates of birth, IBANs, and passport numbers. For
+  higher recall, set `nerCommand` to a local NER model (GLiNER/Presidio) — still offline.
+- **Git-history scanning** — `aegis scan-history` walks every blob in the repo's history and
+  flags secrets that were committed and later "removed."
+- **AI response scanning** — the proxy also scans the model's *output* for newly introduced
+  secrets (e.g. a key the AI invented in generated code) and records them as `response` events.
+- **Compliance reporting** — `aegis report` aggregates the audit log into PCI DSS, HIPAA, GDPR,
+  and a secrets/SOC2 bucket, over an optional `--since` window, as text or JSON.
+- **Central team policy** — point `policyFile` (or `AEGIS_POLICY`) at a shared partial config;
+  it is merged authoritatively over local settings, so one file governs the dictionary, mode,
+  and detectors across every machine.
+- **Dashboard & desktop app** — a local control panel (`aegis gui`) and a chromeless desktop
+  window (`aegis app`) with live status, a redaction tester, policy editor, and activity feed.
+
+**Honest about the differences:** the context-aware PII layer is local heuristics plus an
+*optional* local NER model, not a bundled cloud ML service; central policy is a shared file,
+not full SSO/RBAC. These are deliberate trade-offs to keep Aegis offline and key-free. SSO/RBAC
+and a managed model are on the roadmap.
 
 ---
 
@@ -472,16 +505,73 @@ node dist/cli.js scan path/to/file.env
 
 ---
 
+## Web control panel (GUI)
+
+A local dashboard to operate the guard without the command line. It runs as part of the Aegis
+process and is served on localhost only.
+
+**As a desktop app window (recommended):**
+
+```bash
+node dist/cli.js app            # opens a standalone, chromeless app window
+npm run app                     # same
+```
+
+`aegis app` opens the dashboard in a dedicated window using an installed Chromium-family
+browser in app mode (no Electron, no extra dependency). It appears in the taskbar like a native
+application. If no Chromium browser is found, it falls back to your default browser.
+
+**As a browser tab:**
+
+```bash
+node dist/cli.js gui            # http://127.0.0.1:8799
+node dist/cli.js gui --open     # also open it in your browser
+```
+
+**Inside VS Code:** run **Aegis: Open Dashboard Panel** (a docked panel) or **Aegis: Open
+Dashboard** (external browser).
+
+The page provides:
+
+- **Guard controls** — start/stop the base-URL and system proxies with live status indicators.
+- **Live redaction tester** — paste any text; see the findings and exactly what the AI would
+  receive (scrubbed). Detection runs locally; nothing leaves the machine.
+- **Policy and detectors** — switch mode (redact/block/warn), toggle detector categories, and
+  edit the company dictionary, applied to running proxies immediately.
+- **Activity** — a live feed of redaction/block events (counts and types only, never values).
+
+```text
++---------------------------------------------------------------+
+|  AEGIS  Confidential Data Guard      [*Base-URL] [ System ]    |
++----------------------------+----------------------------------+
+|  Guard controls            |  Policy & detectors              |
+|  * Base-URL proxy  [Stop]  |  Action: (redact v)              |
+|  o System proxy    [Start] |  [x]secrets [x]pii [x]network    |
++----------------------------+----------------------------------+
+|  Live redaction tester                                        |
+|  [ paste .env / code / notes ............................. ]  |
+|  Scrubbed -> key [[REDACTED:ANTHROPIC_KEY:1]]   Findings (3)  |
++---------------------------------------------------------------+
+|  Activity   [REDACT] 19:24:01  /v1/messages  ANTHROPIC_KEY×1  |
++---------------------------------------------------------------+
+```
+
+---
+
 ## CLI commands
 
 ```text
 aegis start       Base-URL proxy. Agents set ANTHROPIC_BASE_URL/OPENAI_BASE_URL to it.
 aegis proxy       System proxy (HTTPS interception). Add --transparent for OS-level capture.
 aegis transparent Print (or --apply as root) the iptables/pf REDIRECT rules.
+aegis app         Open the control panel as a standalone desktop app window.
+aegis gui         Launch the local web control panel (default :8799, --open to open browser).
 aegis status      Check whether the guard is running (probes all ports).
 aegis ca          Show / export the root CA and OS trust instructions.
 aegis setup       Auto-route ALL terminals through the base-URL guard ( --undo to revert ).
 aegis scan        Scan a file (or stdin) for findings; exits non-zero so it gates CI/pre-commit.
+aegis scan-history Scan the entire git history for committed secrets.
+aegis report      Compliance report (PCI/HIPAA/GDPR) from the audit log.
 aegis init        Write a starter aegis.config.json.
 ```
 
@@ -517,9 +607,12 @@ sensible defaults are used. Generate one with `node dist/cli.js init`.
   "blockOn": ["secret"],       // categories that hard-block regardless of mode
 
   "detectors": {
-    "secrets": true, "pii": true, "network": true,
+    "secrets": true, "pii": true, "identity": true, "network": true,
     "dictionary": true, "code": true
   },
+  "scanResponses": true,        // also scan AI responses for new secrets
+  "nerCommand": "",             // optional: a LOCAL NER command for context-aware PII
+  "policyFile": "",             // optional: shared team policy merged over local config
 
   "dictionary": ["Project Phoenix", "acme-internal.com", "BigCustomer Inc"],
   "code": {
@@ -576,7 +669,8 @@ code --install-extension aegis-guard-0.1.0.vsix
 config builds and launches the extension.
 
 **Commands:** Start/Stop Guard Proxy, Start/Stop System Proxy, Show CA Trust Instructions,
-Protect All Terminals, Scan File / Workspace, Redact Selection, Copy as Redacted, Show Activity Log.
+Protect All Terminals, Scan File / Workspace, Redact Selection, Copy as Redacted, Show Activity Log,
+Open Dashboard.
 
 ---
 
@@ -646,6 +740,11 @@ src/
   stream.ts         SSE streaming restorer (handles split placeholders)
   audit.ts          append-only audit (counts only)
   status.ts         liveness probes for `aegis status`
+  gui.ts            local control-panel server (control API + SSE)
+  gui-page.ts       the dashboard HTML/CSS/JS (iOS-style, inlined)
+  app.ts            launches the dashboard as a desktop app window
+  history.ts        git-history secret scanning
+  report.ts         compliance reporting (PCI/HIPAA/GDPR)
   mitm.ts           system proxy: CONNECT + transparent listener (SNI-routed)
   ca.ts             CertAuthority: root CA + per-host leaf certs
   sni.ts            TLS ClientHello SNI extractor
@@ -653,7 +752,7 @@ src/
   scrub/
     index.ts        Scrubber, resolveOverlaps, summarize
     placeholders.ts Vault (ephemeral redact/restore map)
-    detectors/      secrets, pii, network, dictionary, code, util
+    detectors/      secrets, pii, identity, ner, network, dictionary, code, util
 extension/          VS Code extension (wraps the engine)
 test/               31 tests: detectors, roundtrip, stream, ca, mitm, sni
 ```

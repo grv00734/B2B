@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { Scrubber } from "../../dist/scrub/index.js";
 import { Vault } from "../../dist/scrub/placeholders.js";
+import type { Server } from "node:http";
 import { installShellProfile, uninstallShellProfile } from "../../dist/setup.js";
+import { startGui } from "../../dist/gui.js";
 import { getConfig, diagnosticsEnabled, autoStartEnabled } from "./config.js";
 import { DiagnosticsManager } from "./diagnostics.js";
 import { ProxyController } from "./proxy.js";
@@ -9,6 +11,7 @@ import { SystemProxyController } from "./systemProxy.js";
 import { StatusBar } from "./statusbar.js";
 
 let scrubber: Scrubber;
+let guiServer: Server | undefined;
 const ONBOARDED_KEY = "aegis.onboarded";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -105,6 +108,42 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("aegis.redactSelection", () => redactSelection()),
     vscode.commands.registerCommand("aegis.copyRedacted", () => copyRedacted()),
     vscode.commands.registerCommand("aegis.showAudit", () => output.show()),
+    vscode.commands.registerCommand("aegis.openDashboard", () => {
+      const cfg = getConfig();
+      const guiPort = 8799;
+      if (!guiServer) {
+        try {
+          guiServer = startGui(cfg, guiPort);
+        } catch (err) {
+          void vscode.window.showErrorMessage(`Aegis: could not start dashboard — ${String(err)}`);
+          return;
+        }
+      }
+      void vscode.env.openExternal(vscode.Uri.parse(`http://${cfg.host}:${guiPort}`));
+    }),
+    vscode.commands.registerCommand("aegis.openDashboardPanel", () => {
+      const cfg = getConfig();
+      const guiPort = 8799;
+      if (!guiServer) {
+        try {
+          guiServer = startGui(cfg, guiPort);
+        } catch (err) {
+          void vscode.window.showErrorMessage(`Aegis: could not start dashboard — ${String(err)}`);
+          return;
+        }
+      }
+      const url = `http://${cfg.host}:${guiPort}`;
+      const panel = vscode.window.createWebviewPanel("aegisDashboard", "Aegis", vscode.ViewColumn.Active, {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      });
+      panel.webview.html =
+        `<!doctype html><html><head><meta charset="utf-8"/>` +
+        `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; frame-src ${url};"/>` +
+        `<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100vh}</style></head>` +
+        `<body><iframe src="${url}"></iframe></body></html>`;
+    }),
+    { dispose: () => guiServer?.close() },
   );
 
   refreshStatus();

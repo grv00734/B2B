@@ -46,10 +46,19 @@ export interface AegisConfig {
   detectors: {
     secrets: boolean;
     pii: boolean;
+    /** Context-aware PII: names, addresses, DOB, IBAN, passport. */
+    identity: boolean;
     network: boolean;
     dictionary: boolean;
     code: boolean;
   };
+  /** Optional local NER command for context-aware PII (offline). */
+  nerCommand?: string;
+  /** Also scan AI responses for newly introduced secrets/PII. */
+  scanResponses?: boolean;
+  /** Shared policy file (a partial config) merged over local settings, so a
+   * security team can centrally govern dictionary/mode/detectors across machines. */
+  policyFile?: string;
   dictionary: string[];
   code: {
     markers: string[];
