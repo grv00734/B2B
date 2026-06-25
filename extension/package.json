@@ -1,0 +1,106 @@
+{
+  "name": "aegis-guard",
+  "displayName": "Aegis — Confidential Data Guard for AI",
+  "description": "Stops secrets, PII, and proprietary code from leaking to AI agents. Live in-editor detection plus a local guard proxy for Claude Code, Cursor, and any agent.",
+  "version": "0.1.0",
+  "publisher": "aegis",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Linters", "Other"],
+  "keywords": ["dlp", "security", "redaction", "pii", "secrets", "ai", "claude", "privacy"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "aegis.toggleProxy", "title": "Aegis: Toggle Guard Proxy", "category": "Aegis" },
+      { "command": "aegis.startProxy", "title": "Aegis: Start Guard Proxy", "category": "Aegis" },
+      { "command": "aegis.stopProxy", "title": "Aegis: Stop Guard Proxy", "category": "Aegis" },
+      { "command": "aegis.startSystemProxy", "title": "Aegis: Start System Proxy (HTTPS interception)", "category": "Aegis" },
+      { "command": "aegis.stopSystemProxy", "title": "Aegis: Stop System Proxy", "category": "Aegis" },
+      { "command": "aegis.showCaInstructions", "title": "Aegis: Show CA Trust Instructions", "category": "Aegis" },
+      { "command": "aegis.protectAllTerminals", "title": "Aegis: Protect All Terminals (system-wide)", "category": "Aegis" },
+      { "command": "aegis.unprotectAllTerminals", "title": "Aegis: Stop Protecting Other Terminals", "category": "Aegis" },
+      { "command": "aegis.scanFile", "title": "Aegis: Scan Current File", "category": "Aegis" },
+      { "command": "aegis.scanWorkspace", "title": "Aegis: Scan Workspace", "category": "Aegis" },
+      { "command": "aegis.redactSelection", "title": "Aegis: Redact Selection", "category": "Aegis" },
+      { "command": "aegis.copyRedacted", "title": "Aegis: Copy as Redacted", "category": "Aegis" },
+      { "command": "aegis.showAudit", "title": "Aegis: Show Activity Log", "category": "Aegis" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "aegis.redactSelection", "when": "editorHasSelection", "group": "9_aegis@1" },
+        { "command": "aegis.copyRedacted", "when": "editorTextFocus", "group": "9_aegis@2" }
+      ],
+      "commandPalette": [
+        { "command": "aegis.startProxy", "when": "!aegis.proxyRunning" },
+        { "command": "aegis.stopProxy", "when": "aegis.proxyRunning" }
+      ]
+    },
+    "configuration": {
+      "title": "Aegis",
+      "properties": {
+        "aegis.mode": {
+          "type": "string",
+          "enum": ["redact", "block", "warn"],
+          "default": "redact",
+          "markdownDescription": "What to do when confidential data is found in a request to an AI provider.\n\n- `redact`: replace with placeholders, restore in the response\n- `block`: refuse the request\n- `warn`: forward unchanged but log"
+        },
+        "aegis.blockOn": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["secret", "pii", "network", "dictionary", "code"] },
+          "default": ["secret"],
+          "description": "Categories that hard-block a request regardless of mode."
+        },
+        "aegis.detectors.secrets": { "type": "boolean", "default": true, "description": "Detect API keys, tokens, private keys, DB credentials." },
+        "aegis.detectors.pii": { "type": "boolean", "default": true, "description": "Detect emails, phones, SSNs, credit cards." },
+        "aegis.detectors.network": { "type": "boolean", "default": true, "description": "Detect IP addresses and internal hostnames." },
+        "aegis.detectors.dictionary": { "type": "boolean", "default": true, "description": "Detect your company term list (below)." },
+        "aegis.detectors.code": { "type": "boolean", "default": true, "description": "Detect confidential markers and internal namespaces." },
+        "aegis.dictionary": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Company-specific confidential terms: codenames, customer names, internal domains."
+        },
+        "aegis.code.markers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["CONFIDENTIAL", "PROPRIETARY", "INTERNAL USE ONLY", "DO NOT DISTRIBUTE"],
+          "description": "Strings that mark a file as confidential."
+        },
+        "aegis.code.internalNamespaces": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Internal-only package namespaces, e.g. com.acme.internal, @acme/internal."
+        },
+        "aegis.proxy.port": { "type": "number", "default": 8787, "description": "Port for the local guard proxy." },
+        "aegis.proxy.host": { "type": "string", "default": "127.0.0.1", "description": "Host/interface for the local guard proxy." },
+        "aegis.proxy.autoStart": { "type": "boolean", "default": false, "description": "Start the guard proxy automatically when VS Code opens." },
+        "aegis.proxy.setTerminalEnv": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While the proxy runs, set `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` for integrated terminals so agents are routed through Aegis automatically."
+        },
+        "aegis.diagnostics.enabled": { "type": "boolean", "default": true, "description": "Show live squiggles on confidential data in open files." }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "npm run build:core && node esbuild.mjs --production",
+    "build:core": "cd .. && npm run build",
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}

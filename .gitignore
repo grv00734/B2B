@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+aegis-audit.log
+.env
+.env.*
+aegis.config.json
+.DS_Store
+coverage/

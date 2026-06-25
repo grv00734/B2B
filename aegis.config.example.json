@@ -1,0 +1,57 @@
+{
+  "port": 8787,
+  "host": "127.0.0.1",
+
+  "mode": "redact",
+  "blockOn": ["secret"],
+
+  "detectors": {
+    "secrets": true,
+    "pii": true,
+    "network": true,
+    "dictionary": true,
+    "code": true
+  },
+
+  "dictionary": [
+    "Project Phoenix",
+    "acme-internal.com",
+    "Acme Corp",
+    "bigcustomer-inc"
+  ],
+
+  "code": {
+    "markers": [
+      "CONFIDENTIAL",
+      "PROPRIETARY",
+      "INTERNAL USE ONLY",
+      "DO NOT DISTRIBUTE"
+    ],
+    "internalNamespaces": [
+      "com.acme.internal",
+      "@acme/internal"
+    ]
+  },
+
+  "routes": [
+    {
+      "matchPrefix": "/v1/messages",
+      "upstream": "https://api.anthropic.com",
+      "format": "anthropic"
+    },
+    {
+      "matchPrefix": "/v1/chat/completions",
+      "upstream": "https://api.openai.com",
+      "format": "openai"
+    },
+    {
+      "matchPrefix": "/v1/responses",
+      "upstream": "https://api.openai.com",
+      "format": "openai"
+    }
+  ],
+
+  "defaultUpstream": "https://api.anthropic.com",
+
+  "auditLog": "./aegis-audit.log"
+}

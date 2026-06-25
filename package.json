@@ -1,0 +1,50 @@
+{
+  "name": "aegis-dlp",
+  "version": "0.1.0",
+  "description": "A local DLP guard layer that scrubs confidential data out of requests to AI coding agents (Claude Code, Cursor, etc.) before they leave your machine.",
+  "type": "module",
+  "bin": {
+    "aegis": "dist/cli.js"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist",
+    "aegis.config.example.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts start",
+    "start": "node dist/cli.js start",
+    "scan": "tsx src/cli.ts scan",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": [
+    "dlp",
+    "data-loss-prevention",
+    "redaction",
+    "pii",
+    "secrets",
+    "ai",
+    "llm",
+    "claude",
+    "proxy",
+    "security"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/node-forge": "^1.3.14",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "node-forge": "^1.4.0"
+  }
+}
