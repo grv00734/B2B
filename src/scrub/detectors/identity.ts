@@ -65,7 +65,7 @@ const PATTERNS: PatternSpec[] = [
   {
     type: "ORGANIZATION",
     severity: "medium",
-    source: "\\b[A-Z][A-Za-z0-9&.\\- ]{1,40}?\\s(?:Inc|LLC|Ltd|Corp|Corporation|GmbH|PLC|LLP|Co)\\b\\.?",
+    source: "\\b[A-Z][A-Za-z0-9&.\\- ]{1,40}?\\s(?:Inc|LLC|Ltd|Corp|Corporation|GmbH|PLC|LLP)\\b\\.?",
   },
   // Location as "City, ST 12345"
   {
@@ -85,23 +85,36 @@ const PATTERNS: PatternSpec[] = [
   },
 ];
 
-/** "Firstname Lastname" where Firstname is a known given name. */
+// Common capitalized words that follow a given name in ordinary prose but are
+// NOT surnames — guards against false positives like "Mark Down", "Will Call".
+const NOT_A_SURNAME = new Set(
+  (
+    "Down Up Out Off On In Over Under Back Away Through The And But For With From Into Onto " +
+    "Will Can May Might Must Should Would Notes Note Meeting Please Today Tomorrow Now Then Here There " +
+    "Call Calls Says Said Looks Looking Run Runs Set Sets Get Gets Made Make Makes Time Day Week Month"
+  )
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+/** "Firstname Lastname" where Firstname is a known given name and Lastname looks real. */
 function detectKnownNames(text: string): RawMatch[] {
   const out: RawMatch[] = [];
   const re = /\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b/g;
   for (const m of text.matchAll(re)) {
     const first = (m[1] ?? "").toLowerCase();
-    if (GIVEN_NAMES.has(first)) {
-      const start = m.index ?? 0;
-      out.push({
-        start,
-        end: start + m[0].length,
-        value: m[0],
-        type: "PERSON_NAME",
-        category: "pii",
-        severity: "medium",
-      });
-    }
+    const last = m[2] ?? "";
+    if (!GIVEN_NAMES.has(first)) continue;
+    if (NOT_A_SURNAME.has(last) || last.length < 3) continue; // reject prose words
+    const start = m.index ?? 0;
+    out.push({
+      start,
+      end: start + m[0].length,
+      value: m[0],
+      type: "PERSON_NAME",
+      category: "pii",
+      severity: "medium",
+    });
   }
   return out;
 }

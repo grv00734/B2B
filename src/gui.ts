@@ -16,7 +16,7 @@ import { startMitmProxy } from "./mitm.js";
 import type { AuditEntry } from "./audit.js";
 import { buildReport } from "./report.js";
 import { BudgetTracker } from "./budget.js";
-import { loadOrCreateKey } from "./crypto.js";
+import { makeVaultFactory } from "./scrub/surrogate.js";
 import { optimizeText } from "./optimize.js";
 import { authenticate, can, type Action } from "./auth.js";
 import { dashboardHtml } from "./gui-page.js";
@@ -34,13 +34,13 @@ class GuiState {
   audit: AuditEntry[] = [];
   sse = new Set<http.ServerResponse>();
   budget?: BudgetTracker;
-  encKey?: Buffer;
+  makeVault: () => Vault;
 
   constructor(cfg: AegisConfig) {
     this.cfg = cfg;
     this.scrubber = new Scrubber(cfg);
     this.budget = cfg.budget?.enabled ? new BudgetTracker(cfg.budget) : undefined;
-    this.encKey = cfg.encryption?.enabled ? loadOrCreateKey() : undefined;
+    this.makeVault = makeVaultFactory(cfg);
   }
 
   status(): Record<string, unknown> {
@@ -125,9 +125,11 @@ class GuiState {
     this.broadcast({ type: "status", status: this.status() });
   }
 
-  scan(text: string): Record<string, unknown> {
-    const vault = new Vault(this.encKey);
-    const scrubbed = this.scrubber.scrub(text, vault);
+  async scan(text: string): Promise<Record<string, unknown>> {
+    const vault = this.makeVault();
+    const scrubbed = this.scrubber.hasAsync
+      ? await this.scrubber.scrubAsync(text, vault)
+      : this.scrubber.scrub(text, vault);
     const matches = scrubbed.matches;
     // Reflect what actually goes to the AI: scrubbed, then optimized if enabled.
     const opt = this.cfg.optimize?.enabled ? optimizeText(scrubbed.text, this.cfg.optimize) : null;
@@ -214,7 +216,7 @@ export function startGui(cfg: AegisConfig, guiPort: number): Server {
 
       if (path === "/api/scan" && method === "POST") {
         const body = (await readJson(req)) as { text?: string };
-        return json(res, 200, state.scan(body.text ?? ""));
+        return json(res, 200, await state.scan(body.text ?? ""));
       }
 
       // --- RBAC gate for control-plane mutations ---

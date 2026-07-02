@@ -22,6 +22,8 @@
 
   "encryption": { "enabled": false },
 
+  "tokenization": { "mode": "placeholder", "referentialIntegrity": false, "keyId": "k1" },
+
   "optimize": { "enabled": false, "aggressive": false, "maxPasses": 4 },
 
   "auth": {
@@ -33,6 +35,11 @@
   "fleet": { "url": "", "token": "" },
 
   "mcp": { "deniedTools": ["shell", "execute_command", "delete_file"] },
+
+  "ml": {
+    "secretClassifier": { "enabled": false, "threshold": 0.7 },
+    "ner": { "enabled": false, "model": "Xenova/bert-base-NER" }
+  },
 
   "nerCommand": "",
 

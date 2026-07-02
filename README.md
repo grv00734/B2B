@@ -126,9 +126,17 @@ up the offline, no-API-key design:
 - **MCP security** — MCP (Model Context Protocol) tool calls are recognized; arguments are scrubbed
   like any payload, and a **tool deny-list** (`mcp.deniedTools`) blocks dangerous tools (shell,
   file deletion, …) outright before they reach the server.
-- **Local NER bridge** — beyond the built-in name/org/location recognizers, point `nerCommand` at
-  [`scripts/ner_presidio.py`](scripts/ner_presidio.py) to add a local **Presidio/GLiNER** model for
-  context-aware PII — still fully offline.
+- **In-process ML (local, offline)** — opt-in `ml.secretClassifier` is an embedded logistic model
+  that scores novel **secret-like tokens** the regex doesn't know (and scores *down* git SHAs /
+  UUIDs that trip naive entropy), and `ml.ner` runs a **Transformers.js** model for unstructured
+  PII. Both run on-device with no data leaving the machine; the model inference uses an async
+  detection path so it doesn't stall the proxy. NER needs the optional dependency:
+  `npm i @huggingface/transformers`. A subprocess bridge (`nerCommand` →
+  [`scripts/ner_presidio.py`](scripts/ner_presidio.py), Presidio/GLiNER) is also available.
+
+  > ML is for **recall on the fuzzy categories** (novel secrets, names/orgs/locations). Structured
+  > secrets stay on the precise regex+validators. Everything is local — using a *cloud* ML/DLP API
+  > would ship the very data you're protecting, so Aegis never does.
 
 **Honest about the differences:** RBAC + JWT/OIDC verification is built in, but Aegis is not a
 SAML IdP — it consumes your IdP's tokens rather than replacing it. The bundled recognizers are
@@ -405,7 +413,44 @@ flowchart LR
 | `code` | `CONFIDENTIAL` / `PROPRIETARY` markers, internal package namespaces |
 | `identity` | person names, street addresses, DOB, IBAN, passport, **organizations, locations** |
 | `entropy` | high-entropy novel tokens regex misses (opt-in; off by default) |
-| `ner` (optional) | local Presidio/GLiNER model via `nerCommand` for context-aware PII |
+| `ml.secretClassifier` (optional) | **in-process logistic ML** scoring novel secret-like tokens (no download) |
+| `ml.ner` (optional) | **in-process Transformers.js** NER for unstructured PII (lazy, offline) |
+| `ner` (optional) | external local Presidio/GLiNER model via `nerCommand` |
+
+---
+
+## Detection quality (benchmarks & tuning)
+
+Regex + heuristics produce false positives unless they're measured and tuned — so Aegis ships a
+labeled benchmark and a CI gate. `aegis benchmark` runs a corpus of positives **and benign
+"trap" negatives** (the cases enterprise buyers probe) and reports precision / recall / F1 and
+the benign false-positive rate, listing every FP/FN.
+
+The trap set includes: semantic versions (`1.2.3`), git SHAs, UUIDs, non-Luhn card-shaped digit
+runs, hex colors, aspect ratios, order numbers, and name-shaped prose (`"Mark Down the notes"`).
+
+```text
+$ aegis benchmark
+Aegis detection benchmark
+  cases: 29   TP=16 FP=0 FN=0
+  precision: 100.0%   recall: 100.0%   F1: 100.0%
+  benign false-positive rate: 0.0% (0/13 benign cases tripped)
+```
+
+Tuning levers that keep precision high:
+- **Severity-aware overlap resolution** — a specific high-severity secret (e.g. a DB-URI
+  password) wins over a generic match (e.g. an email) on the same span.
+- **Validators, not just patterns** — Luhn for cards, a 7–11 digit gate for phones, octet
+  checks for IPv4, a common-word stoplist for names, Luhn/format gates throughout.
+- **`allowlist`** (literal or `/regex/`) to suppress org-specific false positives, and
+  **`nerCommand`** to add a local model for recall on unstructured PII.
+
+The thresholds are enforced in [`test/benchmark.test.ts`](test/benchmark.test.ts), so any change
+that regresses precision/recall or introduces a benign false positive **fails CI**.
+
+> These are curated-corpus numbers, not a claim of perfection on arbitrary text. The point is
+> that quality is measured and regression-gated — extend the corpus in
+> [`src/benchmark.ts`](src/benchmark.ts) with your own hard cases.
 
 ---
 
@@ -476,7 +521,7 @@ git clone <repo-url>
 cd B2B
 npm install        # installs deps (node-forge for certificates; dev: typescript, vitest, tsx)
 npm run build      # compiles TypeScript to dist/
-npm test           # runs the 119-test suite (optional but recommended)
+npm test           # runs the 130-test suite (optional but recommended)
 ```
 
 After `npm run build`, the CLI entry point is `dist/cli.js`. Run it with `node dist/cli.js <command>`.
@@ -643,6 +688,7 @@ aegis scan-history Scan the entire git history for committed secrets.
 aegis report      Compliance report (PCI/HIPAA/GDPR) from the audit log.
 aegis optimize    Preview prompt-compression token savings on a file/stdin.
 aegis fleet       Run the central fleet collector (aggregate spend across machines).
+aegis benchmark   Measure detection precision/recall + false positives (CI-gated).
 aegis init        Write a starter aegis.config.json.
 ```
 
@@ -856,6 +902,7 @@ src/
   optimize.ts       local prompt compression (loop reduction passes to convergence)
   auth.ts           RBAC + token/JWT (SSO) verification for the control plane
   fleet.ts          fleet collector + aggregator + agent reporting
+  benchmark.ts      detection-quality corpus + precision/recall metrics
   mcp.ts            MCP JSON-RPC detection + tool deny-list
 scripts/ner_presidio.py  ready-to-use local NER for the nerCommand hook
   types.ts          shared types
@@ -877,7 +924,8 @@ scripts/ner_presidio.py  ready-to-use local NER for the nerCommand hook
   scrub/
     index.ts        Scrubber, resolveOverlaps, summarize
     placeholders.ts Vault (ephemeral redact/restore map)
-    detectors/      secrets, pii, identity, ner, network, dictionary, code, util
+    detectors/      secrets, pii, identity, ner, network, dictionary, code, util,
+                    mlSecret (logistic), mlNer (transformers.js)
 extension/          VS Code extension (wraps the engine)
 test/               119 tests: detectors, identity, entropy, roundtrip, stream, crypto, optimize,
                     policy, budget, providers, ca, mitm, sni, report, history, samples, enterprise
@@ -888,13 +936,13 @@ test/               119 tests: detectors, identity, entropy, roundtrip, stream, 
 ## Testing
 
 ```bash
-npm test          # 119 unit tests across 18 suites
+npm test          # 130 unit tests across 20 suites
 npm run test:watch
 ```
 
 ```mermaid
 flowchart LR
-    subgraph Suite["119 unit tests · 18 suites"]
+    subgraph Suite["130 unit tests · 20 suites"]
         D["detectors<br/>secrets/pii/dictionary/code"]
         ID["identity<br/>names/address/DOB/IBAN"]
         EN["entropy<br/>novel high-entropy tokens"]
@@ -912,6 +960,8 @@ flowchart LR
         HI["history<br/>git-history secret scan"]
         SA["samples<br/>real fixture files"]
         EN2["enterprise<br/>RBAC/JWT + fleet + MCP + orgs/locations"]
+        BM["benchmark<br/>precision/recall + 0 false positives (CI gate)"]
+        ML["ml<br/>secret classifier + async path + NER fallback"]
     end
 ```
 

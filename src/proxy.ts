@@ -2,12 +2,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AegisConfig, RouteConfig } from "./types.js";
 import { Scrubber, summarize } from "./scrub/index.js";
 import { Vault } from "./scrub/placeholders.js";
-import { scrubRequestBody } from "./messages.js";
+import { scrubRequestBody, scrubRequestBodyAsync } from "./messages.js";
 import { SseRestorer } from "./stream.js";
 import { AuditLog, type Action, type AuditEntry } from "./audit.js";
 import { decide } from "./policy.js";
 import { BudgetTracker, estimateTokens, extractUsage, costOf, identifyUser } from "./budget.js";
-import { loadOrCreateKey } from "./crypto.js";
+import { makeVaultFactory } from "./scrub/surrogate.js";
 import { optimizeText } from "./optimize.js";
 import { mcpDenied } from "./mcp.js";
 
@@ -43,7 +43,8 @@ export interface ProxyContext {
   scrubber: Scrubber;
   audit: AuditLog;
   budget?: BudgetTracker;
-  encKey?: Buffer;
+  /** Mint a Vault configured per the active tokenization mode. */
+  makeVault: () => Vault;
 }
 
 export function createContext(cfg: AegisConfig, opts: ContextOptions = {}): ProxyContext {
@@ -52,7 +53,7 @@ export function createContext(cfg: AegisConfig, opts: ContextOptions = {}): Prox
     scrubber: new Scrubber(cfg),
     audit: new AuditLog(cfg.auditLog, opts.auditSink),
     budget: opts.budget ?? (cfg.budget?.enabled ? new BudgetTracker(cfg.budget) : undefined),
-    encKey: cfg.encryption?.enabled ? loadOrCreateKey() : undefined,
+    makeVault: makeVaultFactory(cfg),
   };
 }
 
@@ -134,7 +135,7 @@ export async function handleRequest(
   const isJson = contentType.includes("application/json") || contentType.includes("+json");
 
   let forwardBody: Buffer | string | undefined = rawBody.length ? rawBody : undefined;
-  let responseVault = new Vault(ctx.encKey); // carries the key so responses can be decrypted
+  let responseVault = ctx.makeVault(); // configured for the active tokenization mode
   let action: Action = "clean";
   let summary = summarize([]);
   let model: string | undefined;
@@ -169,8 +170,10 @@ export async function handleRequest(
         return;
       }
 
-      const scrubVault = new Vault(ctx.encKey);
-      const { body: scrubbed, matches } = scrubRequestBody(parsed, route.format, scrubber, scrubVault, optimizeFn);
+      const scrubVault = ctx.makeVault();
+      const { body: scrubbed, matches } = scrubber.hasAsync
+        ? await scrubRequestBodyAsync(parsed, route.format, scrubber, scrubVault, optimizeFn)
+        : scrubRequestBody(parsed, route.format, scrubber, scrubVault, optimizeFn);
       summary = summarize(matches);
 
       const decision = decide(matches, cfg, route.mode ?? cfg.mode);

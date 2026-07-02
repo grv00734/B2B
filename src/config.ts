@@ -31,9 +31,11 @@ export const DEFAULT_CONFIG: AegisConfig = {
   auditLog: "./aegis-audit.log",
   budget: { enabled: false, windowHours: 24, action: "block" },
   encryption: { enabled: false },
+  tokenization: { mode: "placeholder" },
   optimize: { enabled: false },
   auth: { enabled: false },
   mcp: { deniedTools: [] },
+  ml: { secretClassifier: { enabled: false }, ner: { enabled: false } },
   mitm: {
     port: 8788,
     transparentPort: 8443,
@@ -66,10 +68,15 @@ function merge(base: AegisConfig, override: Partial<AegisConfig>): AegisConfig {
     mitm: { ...base.mitm, ...(override.mitm ?? {}) },
     budget: override.budget ? { ...base.budget, ...override.budget } : base.budget,
     encryption: { enabled: false, ...(base.encryption ?? {}), ...(override.encryption ?? {}) },
+    tokenization: { ...(base.tokenization ?? {}), ...(override.tokenization ?? {}) },
     optimize: { enabled: false, ...(base.optimize ?? {}), ...(override.optimize ?? {}) },
     auth: { enabled: false, ...(base.auth ?? {}), ...(override.auth ?? {}) },
     fleet: override.fleet ?? base.fleet,
     mcp: { ...(base.mcp ?? {}), ...(override.mcp ?? {}) },
+    ml: {
+      secretClassifier: { enabled: false, ...(base.ml?.secretClassifier ?? {}), ...(override.ml?.secretClassifier ?? {}) },
+      ner: { enabled: false, ...(base.ml?.ner ?? {}), ...(override.ml?.ner ?? {}) },
+    },
     // Arrays replace wholesale when provided.
     blockOn: override.blockOn ?? base.blockOn,
     dictionary: override.dictionary ?? base.dictionary,

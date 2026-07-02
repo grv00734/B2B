@@ -113,3 +113,92 @@ export function scrubRequestBody(
   // string we can find. Safe by default — over-redacts rather than leaks.
   return { body: scrubDeep(body, scrubber, vault, sink, opt), matches: sink };
 }
+
+// ----- async variants (used when the Scrubber has in-process ML detectors) -----
+
+async function scrubStringAsync(s: unknown, scrubber: Scrubber, vault: Vault, sink: RawMatch[], opt?: TextTransform): Promise<unknown> {
+  if (typeof s !== "string") return s;
+  const { text, matches } = await scrubber.scrubAsync(s, vault);
+  sink.push(...matches);
+  return opt ? opt(text) : text;
+}
+
+async function scrubContentAsync(content: Json, scrubber: Scrubber, vault: Vault, sink: RawMatch[], opt?: TextTransform): Promise<Json> {
+  if (typeof content === "string") return scrubStringAsync(content, scrubber, vault, sink, opt);
+  if (Array.isArray(content)) {
+    const out: Json[] = [];
+    for (const block of content) {
+      if (block && typeof block === "object" && "text" in block) {
+        const b = block as Record<string, unknown>;
+        out.push({ ...b, text: await scrubStringAsync(b.text, scrubber, vault, sink, opt) });
+      } else out.push(block);
+    }
+    return out;
+  }
+  return content;
+}
+
+async function scrubDeepAsync(value: Json, scrubber: Scrubber, vault: Vault, sink: RawMatch[], opt?: TextTransform): Promise<Json> {
+  if (typeof value === "string") return scrubStringAsync(value, scrubber, vault, sink, opt);
+  if (Array.isArray(value)) {
+    const out: Json[] = [];
+    for (const v of value) out.push(await scrubDeepAsync(v, scrubber, vault, sink, opt));
+    return out;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = await scrubDeepAsync(v, scrubber, vault, sink, opt);
+    return out;
+  }
+  return value;
+}
+
+/** Async counterpart of scrubRequestBody — awaits in-process ML detectors. */
+export async function scrubRequestBodyAsync(
+  body: Json,
+  format: RouteFormat,
+  scrubber: Scrubber,
+  vault: Vault,
+  opt?: TextTransform,
+): Promise<RequestScrubResult> {
+  const sink: RawMatch[] = [];
+  if (!body || typeof body !== "object") return { body, matches: sink };
+
+  if (format === "anthropic" || format === "openai") {
+    const b = { ...(body as Record<string, unknown>) };
+    if ("system" in b) b.system = await scrubContentAsync(b.system, scrubber, vault, sink, opt);
+    if (Array.isArray(b.messages)) {
+      const msgs: Json[] = [];
+      for (const msg of b.messages as Json[]) {
+        if (msg && typeof msg === "object" && "content" in msg) {
+          const m = msg as Record<string, unknown>;
+          msgs.push({ ...m, content: await scrubContentAsync(m.content, scrubber, vault, sink, opt) });
+        } else msgs.push(msg);
+      }
+      b.messages = msgs;
+    }
+    if ("input" in b) b.input = await scrubContentAsync(b.input, scrubber, vault, sink, opt);
+    return { body: b, matches: sink };
+  }
+
+  if (format === "gemini") {
+    const b = { ...(body as Record<string, unknown>) };
+    if (Array.isArray(b.contents)) {
+      const cs: Json[] = [];
+      for (const c of b.contents as Json[]) {
+        if (c && typeof c === "object" && "parts" in c) {
+          const cc = c as Record<string, unknown>;
+          cs.push({ ...cc, parts: await scrubContentAsync(cc.parts, scrubber, vault, sink, opt) });
+        } else cs.push(c);
+      }
+      b.contents = cs;
+    }
+    if (b.systemInstruction && typeof b.systemInstruction === "object" && "parts" in (b.systemInstruction as object)) {
+      const si = b.systemInstruction as Record<string, unknown>;
+      b.systemInstruction = { ...si, parts: await scrubContentAsync(si.parts, scrubber, vault, sink, opt) };
+    }
+    return { body: b, matches: sink };
+  }
+
+  return { body: await scrubDeepAsync(body, scrubber, vault, sink, opt), matches: sink };
+}

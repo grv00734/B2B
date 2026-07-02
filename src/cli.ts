@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyFileSync } from "node:fs";
-import { loadConfig } from "./config.js";
+import { loadConfig, DEFAULT_CONFIG } from "./config.js";
 import { startServer } from "./server.js";
 import { Scrubber, summarize } from "./scrub/index.js";
 import { installShellProfile, uninstallShellProfile } from "./setup.js";
@@ -18,6 +18,7 @@ import { scanHistory } from "./history.js";
 import { buildReport, formatReportText, parseAuditFile } from "./report.js";
 import { optimizeText } from "./optimize.js";
 import { startFleetCollector } from "./fleet.js";
+import { runBenchmark, formatBenchmark } from "./benchmark.js";
 import { spawn } from "node:child_process";
 
 function parseFlags(args: string[]): { positionals: string[]; flags: Record<string, string> } {
@@ -290,6 +291,17 @@ function cmdSetup(flags: Record<string, string>): void {
   console.log(`Undo any time with: aegis setup --undo`);
 }
 
+function cmdBenchmark(flags: Record<string, string>): void {
+  // Default to a clean baseline so the benchmark measures the built-in detectors
+  // (not a user's allowlist/config). Pass --config to benchmark your own config.
+  const cfg = flags.config ? loadConfig(flags.config) : DEFAULT_CONFIG;
+  const scrubber = new Scrubber(cfg);
+  const m = runBenchmark(scrubber);
+  console.log(formatBenchmark(m));
+  if (flags.json === "true") console.log("\n" + JSON.stringify(m, null, 2));
+  process.exitCode = m.fp === 0 ? 0 : 2;
+}
+
 function cmdFleet(flags: Record<string, string>): void {
   const cfg = loadConfig(flags.config);
   const port = flags.port ? Number(flags.port) : 8790;
@@ -406,6 +418,9 @@ function main(): void {
       break;
     case "fleet":
       cmdFleet(flags);
+      break;
+    case "benchmark":
+      cmdBenchmark(flags);
       break;
     case "report":
       cmdReport(flags);

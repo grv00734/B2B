@@ -18,14 +18,14 @@ import * as tls from "node:tls";
 import type { AegisConfig, RouteFormat } from "./types.js";
 import { Scrubber, summarize } from "./scrub/index.js";
 import { Vault } from "./scrub/placeholders.js";
-import { scrubRequestBody } from "./messages.js";
+import { scrubRequestBody, scrubRequestBodyAsync } from "./messages.js";
 import { SseRestorer } from "./stream.js";
 import { AuditLog, type Action, type AuditEntry } from "./audit.js";
 import { CertAuthority, aegisHome } from "./ca.js";
 import { peekSni } from "./sni.js";
 import { decide } from "./policy.js";
 import { BudgetTracker, estimateTokens, extractUsage, costOf, identifyUser } from "./budget.js";
-import { loadOrCreateKey } from "./crypto.js";
+import { makeVaultFactory } from "./scrub/surrogate.js";
 import { optimizeText } from "./optimize.js";
 
 export interface Upstream {
@@ -79,7 +79,7 @@ export function startMitmProxy(cfg: AegisConfig, opts: MitmOptions = {}): MitmHa
   const scrubber = new Scrubber(cfg);
   const audit = new AuditLog(undefined, opts.auditSink);
   const budget = opts.budget ?? (cfg.budget?.enabled ? new BudgetTracker(cfg.budget) : undefined);
-  const encKey = cfg.encryption?.enabled ? loadOrCreateKey(opts.caDir ?? aegisHome()) : undefined;
+  const makeVault = makeVaultFactory(cfg);
   const allow = new Set(cfg.mitm.hosts.map((h) => h.toLowerCase()));
   const resolveUpstream =
     opts.resolveUpstream ??
@@ -219,7 +219,7 @@ export function startMitmProxy(cfg: AegisConfig, opts: MitmOptions = {}): MitmHa
     const isJson = String(req.headers["content-type"] ?? "").includes("json");
 
     let forwardBody: Buffer | string = rawBody;
-    let responseVault = new Vault(encKey);
+    let responseVault = makeVault();
     let action: Action = "clean";
     let summary = summarize([]);
     let model: string | undefined;
@@ -236,8 +236,10 @@ export function startMitmProxy(cfg: AegisConfig, opts: MitmOptions = {}): MitmHa
       try {
         const parsed = JSON.parse(rawBody.toString("utf8"));
         if (typeof parsed?.model === "string") model = parsed.model;
-        const vault = new Vault(encKey);
-        const { body: scrubbed, matches } = scrubRequestBody(parsed, format, scrubber, vault, optimizeFn);
+        const vault = makeVault();
+        const { body: scrubbed, matches } = scrubber.hasAsync
+          ? await scrubRequestBodyAsync(parsed, format, scrubber, vault, optimizeFn)
+          : scrubRequestBody(parsed, format, scrubber, vault, optimizeFn);
         summary = summarize(matches);
         const decision = decide(matches, cfg, cfg.mode);
 

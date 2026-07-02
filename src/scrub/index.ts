@@ -8,6 +8,8 @@ import { networkDetector } from "./detectors/network.js";
 import { makeDictionaryDetector } from "./detectors/dictionary.js";
 import { makeCodeDetector } from "./detectors/code.js";
 import { entropyDetector } from "./detectors/entropy.js";
+import { makeSecretClassifier } from "./detectors/mlSecret.js";
+import { makeMlNerDetector } from "./detectors/mlNer.js";
 
 const SEVERITY_RANK: Record<Severity, number> = { low: 1, medium: 2, high: 3, critical: 4 };
 
@@ -16,9 +18,16 @@ export interface ScrubResult {
   matches: RawMatch[];
 }
 
-/** Drop overlapping matches, preferring earlier start then longer span. */
+/**
+ * Drop overlapping matches. Preference order: earliest start, then (for matches
+ * that start at the same place) higher severity, then longer span. The severity
+ * tie-break means a specific high-severity secret (e.g. a DB-URI password) wins
+ * over a generic lower-severity match (e.g. an email) covering the same text.
+ */
 export function resolveOverlaps(matches: RawMatch[]): RawMatch[] {
-  const sorted = [...matches].sort((a, b) => a.start - b.start || b.end - a.end);
+  const sorted = [...matches].sort(
+    (a, b) => a.start - b.start || SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.end - a.end,
+  );
   const kept: RawMatch[] = [];
   let lastEnd = -1;
   for (const m of sorted) {
@@ -79,6 +88,8 @@ function buildAllow(entries: string[] = []): Array<(v: string) => boolean> {
 export class Scrubber {
   private detectors: Detector[];
   private allow: Array<(v: string) => boolean>;
+  /** True if any detector requires the async path (e.g. in-process ML). */
+  readonly hasAsync: boolean;
 
   constructor(cfg: AegisConfig) {
     this.allow = buildAllow(cfg.allowlist);
@@ -87,28 +98,43 @@ export class Scrubber {
     if (cfg.detectors.pii) d.push(piiDetector);
     if (cfg.detectors.identity) d.push(identityDetector);
     if (cfg.nerCommand) d.push(makeNerDetector(cfg.nerCommand));
+    if (cfg.ml?.secretClassifier?.enabled) d.push(makeSecretClassifier(cfg.ml.secretClassifier.threshold));
     if (cfg.detectors.network) d.push(networkDetector);
     if (cfg.detectors.dictionary) d.push(makeDictionaryDetector(cfg.dictionary));
     if (cfg.detectors.code) d.push(makeCodeDetector(cfg.code.markers, cfg.code.internalNamespaces));
     if (cfg.detectors.entropy) d.push(entropyDetector);
+    if (cfg.ml?.ner?.enabled) d.push(makeMlNerDetector(cfg.ml.ner.model));
     this.detectors = d;
+    this.hasAsync = d.some((det) => typeof det.runAsync === "function");
   }
 
-  /** Detect without mutating — used by `aegis scan` and block-mode decisions. */
-  detect(text: string): RawMatch[] {
-    if (!text) return [];
-    const all: RawMatch[] = [];
-    for (const det of this.detectors) all.push(...det.run(text));
+  /** Apply overlap resolution + allowlist suppression to a raw match list. */
+  private finalize(all: RawMatch[]): RawMatch[] {
     const resolved = resolveOverlaps(all);
     if (this.allow.length === 0) return resolved;
     return resolved.filter((m) => !this.allow.some((fn) => fn(m.value)));
   }
 
-  /** Replace every detected value with a stable placeholder from the vault. */
-  scrub(text: string, vault: Vault): ScrubResult {
-    const matches = this.detect(text);
-    if (matches.length === 0) return { text, matches };
+  /** Synchronous detection (skips async-only detectors). */
+  detect(text: string): RawMatch[] {
+    if (!text) return [];
+    const all: RawMatch[] = [];
+    for (const det of this.detectors) all.push(...det.run(text));
+    return this.finalize(all);
+  }
 
+  /** Detection including async detectors (in-process ML). */
+  async detectAsync(text: string): Promise<RawMatch[]> {
+    if (!text) return [];
+    const all: RawMatch[] = [];
+    for (const det of this.detectors) {
+      all.push(...(det.runAsync ? await det.runAsync(text) : det.run(text)));
+    }
+    return this.finalize(all);
+  }
+
+  private replace(text: string, matches: RawMatch[], vault: Vault): ScrubResult {
+    if (matches.length === 0) return { text, matches };
     // Apply replacements right-to-left so earlier offsets stay valid.
     let out = text;
     for (const m of [...matches].sort((a, b) => b.start - a.start)) {
@@ -116,6 +142,16 @@ export class Scrubber {
       out = out.slice(0, m.start) + token + out.slice(m.end);
     }
     return { text: out, matches };
+  }
+
+  /** Replace every detected value with a stable placeholder from the vault. */
+  scrub(text: string, vault: Vault): ScrubResult {
+    return this.replace(text, this.detect(text), vault);
+  }
+
+  /** Async scrub (uses ML detectors when present). */
+  async scrubAsync(text: string, vault: Vault): Promise<ScrubResult> {
+    return this.replace(text, await this.detectAsync(text), vault);
   }
 }
 

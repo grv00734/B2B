@@ -24,12 +24,30 @@ export interface RawMatch {
 export interface Detector {
   name: string;
   category: Category;
+  /** Synchronous detection. Async-only detectors return [] here. */
   run(text: string): RawMatch[];
+  /** Optional asynchronous detection (e.g. in-process ML inference). */
+  runAsync?(text: string): Promise<RawMatch[]>;
 }
 
 export type Mode = "redact" | "block" | "warn";
 
 export type RouteFormat = "anthropic" | "openai" | "gemini" | "passthrough";
+
+/**
+ * Tokenization strategy for redaction.
+ *  - `placeholder`: `[[REDACTED:TYPE:N]]` index tokens (default; lightest).
+ *  - `encrypt`: AES-256-GCM `[[AEGIS:…]]` ciphertext tokens (stateless restore).
+ *  - `fpt`: format-preserving surrogates — same-shape fake values that keep the
+ *    model's utility and restore statelessly via keyed FPE (see scrub/surrogate.ts).
+ */
+export interface TokenizationConfig {
+  mode?: "placeholder" | "encrypt" | "fpt";
+  /** Preserve co-reference between related values (Project Phoenix ↔ phoenix-db). */
+  referentialIntegrity?: boolean;
+  /** Current key id for FPE surrogates (rotation; old ids stay restore-only). */
+  keyId?: string;
+}
 
 export interface OptimizeConfig {
   enabled: boolean;
@@ -78,8 +96,11 @@ export interface AegisConfig {
   /** Token / cost spend control across AI services. */
   budget?: BudgetConfig;
   /** Encrypt confidential values (AES-256-GCM, local key) instead of using index
-   * placeholders. The ciphertext is sent to the AI and decrypted on the response. */
+   * placeholders. The ciphertext is sent to the AI and decrypted on the response.
+   * Superseded by `tokenization.mode: "encrypt"`; kept for back-compat. */
   encryption?: { enabled: boolean };
+  /** How confidential values are replaced in outbound traffic. */
+  tokenization?: TokenizationConfig;
   /** Local prompt compression to cut tokens before requests leave (no AI calls). */
   optimize?: OptimizeConfig;
   /** RBAC / SSO for the control plane (dashboard API, config, fleet). */
@@ -88,6 +109,13 @@ export interface AegisConfig {
   fleet?: { url?: string; token?: string };
   /** MCP (Model Context Protocol) tool security. */
   mcp?: { deniedTools?: string[] };
+  /** In-process ML detection (all local, no cloud). */
+  ml?: {
+    /** Embedded logistic secret classifier (catches novel secret-like tokens). */
+    secretClassifier?: { enabled: boolean; threshold?: number };
+    /** Transformers.js NER for unstructured PII (lazy; requires the optional dep). */
+    ner?: { enabled: boolean; model?: string };
+  };
   dictionary: string[];
   code: {
     markers: string[];
